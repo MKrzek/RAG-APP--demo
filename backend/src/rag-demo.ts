@@ -1,8 +1,9 @@
 import 'dotenv/config'
 import OpenAI from 'openai'
 import { Pinecone } from '@pinecone-database/pinecone'
-import { simpleChunkText } from './chunking/simple-chunking.ts'
-
+import { chunkTechnicalDoc } from './chunking/technical-doc-chunking.ts'
+import { retrieveRelevantChunks } from './retrieve-relevant-chunks.ts'
+import { embedTexts } from './embed-text.ts'
 
 /**
  * 0. Basic clients
@@ -16,21 +17,6 @@ export const pinecone = new Pinecone({
 })
 
 export const INDEX_NAME = 'rag-ts-demo'
-
-
-
-/**
- * 2. Embedding helper
- */
-
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const response = await openai.embeddings.create({
-    model: 'text-embedding-3-small', // cheap + good starter
-    input: texts,
-  })
-
-  return response.data.map((item) => item.embedding)
-}
 
 /**
  * 3. Index sample documents into Pinecone
@@ -67,7 +53,7 @@ and save the updated information before the next billing cycle.
 ]
 
 async function indexDocuments() {
-  const index = pinecone.Index({name: INDEX_NAME})
+  const index = pinecone.Index({ name: INDEX_NAME })
 
   const records: {
     id: string
@@ -76,7 +62,11 @@ async function indexDocuments() {
   }[] = []
 
   for (const doc of sampleDocs) {
-    const chunks = simpleChunkText(doc.text)
+    const chunks = chunkTechnicalDoc(doc.text, {
+      maxChars: 1500,
+      chunkOverlap: 200,
+      minChars: 300,
+    })
 
     console.log(`Document ${doc.id} produced ${chunks.length} chunks`)
 
@@ -87,7 +77,7 @@ async function indexDocuments() {
 
       records.push({
         id: vectorId,
-        values: embeddings[i],
+        values: embeddings[i] || [],
         metadata: {
           docId: doc.id,
           title: doc.title,
@@ -98,7 +88,7 @@ async function indexDocuments() {
   }
 
   // upsert all records (you might batch in real app)
-    if (records.length === 0) {
+  if (records.length === 0) {
     console.warn('No records to upsert – check your chunking / docs.')
     return
   }
@@ -112,73 +102,14 @@ async function indexDocuments() {
 }
 
 
-
-/**
- * 4. Retrieval: given a question, get top K chunks
- */
-
-async function retrieveRelevantChunks(
-  question: string,
-  topK = 4
-): Promise<{ text: string; score: number; title: string }[]> {
-  const index = pinecone.Index({name: INDEX_NAME})
-
-  // 1) Embed question
-  const [questionEmbedding] = await embedTexts([question])
-
-  // 2) Query Pinecone
-  const queryResponse = await index.query({
-    vector: questionEmbedding,
-    topK,
-    includeMetadata: true,
-  })
-
-  const matches = queryResponse.matches ?? []
-
-  console.log('\n[Retrieval] Raw matches from Pinecone:')
-  for (const m of matches) {
-    console.log(
-      `- id=${m.id}, score=${m.score?.toFixed(3)}, title=${m.metadata?.title}`
-    )
-  }
-
-  if (matches.length === 0) {
-    console.log('[Retrieval] No matches returned.')
-    return []
-  }
-
-  // 3) Relative threshold: keep only chunks close to the best one
-  const bestScore = matches[0]?.score ?? 0
-  const threshold = bestScore * 0.75 // 75% of best; tweak this
-
-  console.log(
-    `[Retrieval] bestScore=${bestScore.toFixed(3)}, threshold=${threshold.toFixed(
-      3
-    )}`
-  )
-
-  const filtered = matches.filter((m) => (m.score ?? 0) >= threshold)
-
-  console.log('[Retrieval] After filtering:')
-  for (const m of filtered) {
-    console.log(
-      `- id=${m.id}, score=${m.score?.toFixed(3)}, title=${m.metadata?.title}`
-    )
-  }
-
-  return filtered.map((m) => ({
-    text: (m.metadata?.text as string) ?? '',
-    title: (m.metadata?.title as string) ?? '',
-    score: m.score ?? 0,
-  }))
-}
-
-
 /**
  * 5. RAG answer: build context + call OpenAI chat
  */
 
-export async function answerWithRAG(question: string): Promise<string> {
+export async function answerWithRAG(
+  question: string,
+  history: { role: 'user' | 'assistant'; content: string }[] = []
+): Promise<{ answer: string; sources: { id: string; title: string; score: number }[] }> {
   const chunks = await retrieveRelevantChunks(question, 4)
 
   const context = chunks
@@ -190,12 +121,20 @@ export async function answerWithRAG(question: string): Promise<string> {
 
   const systemPrompt = `
 You are a helpful support assistant for a SaaS product.
-Answer ONLY using the information in the sources below.
+Answer ONLY using the information in the sources and conversation history below.
 If the answer is not in the sources, say you don't know.
-Always answer in clear, simple English.
 `
 
+  const historyText = history
+    .map(
+      (m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`
+    )
+    .join('\n')
+
   const userPrompt = `
+CONVERSATION HISTORY:
+${historyText || '(none yet)'}
+
 QUESTION:
 ${question}
 
@@ -211,28 +150,37 @@ ${context}
     ],
   })
 
-  return completion.choices[0].message.content ?? ''
+  const answer = completion.choices[0]?.message.content ?? ''
+
+  const sources = chunks.map((c, i) => ({
+    id: c.id || `source-${i + 1}`,
+    title: c.title || `Source ${i + 1}`,
+    score: c.score,
+  }))
+
+  return { answer, sources }
 }
+
 
 /**
  * 6. Small demo runner
  */
 
-async function main() {
-  // 1) index documents (run once; in a real app you might skip if already done)
-  await indexDocuments()
+// async function main() {
+//   // 1) index documents (run once; in a real app you might skip if already done)
+//   await indexDocuments()
 
-  // 2) ask a question
-  const question = 'How can I reset my password?'
-  const answer = await answerWithRAG(question)
+//   // 2) ask a question
+//   const question = 'How can I reset my password?'
+//   const answer = await answerWithRAG(question)
 
-  console.log('\nQUESTION:')
-  console.log(question)
-  console.log('\nANSWER:')
-  console.log(answer)
-}
+//   console.log('\nQUESTION:')
+//   console.log(question)
+//   console.log('\nANSWER:')
+//   console.log(answer)
+// }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+// main().catch((err) => {
+//   console.error(err)
+//   process.exit(1)
+// })

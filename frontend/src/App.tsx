@@ -6,13 +6,16 @@ type Message = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  sources?: { id: string; title: string; score: number }[]
 }
+
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [conversationId, setConversationId] = useState<string | null>(null)
 
   const sendMessage = async () => {
     const question = input.trim()
@@ -32,13 +35,22 @@ function App() {
     try {
       setLoading(true)
 
-      const res = await axios.post('/api/chat', { question })
+      const res = await axios.post('/api/chat', {
+        question,
+        conversationId,
+      })
 
       const answerText: string = res.data?.answer ?? '[No answer]'
+      const newConversationId: string = res.data?.conversationId ?? conversationId ?? 'default'
+      setConversationId(newConversationId)
+
+      const sources = (res.data?.sources ?? []) as { id: string; title: string; score: number }[]
+
       const assistantMsg: Message = {
         id: `a-${Date.now()}`,
         role: 'assistant',
         content: answerText,
+        sources,
       }
 
       setMessages(prev => [...prev, assistantMsg])
@@ -50,7 +62,7 @@ function App() {
     }
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: React.SubmitEvent<HTMLFormElement>) => {
     e.preventDefault()
     sendMessage()
   }
@@ -69,14 +81,34 @@ function App() {
               <div className="message-role">
                 {m.role === 'user' ? 'You' : 'Assistant'}
               </div>
-              <div className="message-content">{m.content}</div>
+              <div className="message-content">
+                {m.content}
+                {m.role === 'assistant' && m.sources && m.sources.length > 0 && (
+                  <div className="sources">
+                    <div className="sources-title">Sources:</div>
+                    <ul>
+                      {m.sources.map((s) => (
+                        <li key={s.id}>
+                          <span className="source-title">{s.title}</span>
+                          <span className="source-score">
+                            ({s.score.toFixed(2)})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
-
           {loading && (
-            <div className="message assistant">
+            <div className="message assistant loading">
               <div className="message-role">Assistant</div>
-              <div className="message-content">Thinking…</div>
+              <div className="message-content">
+                <div className="dot-pulse">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
             </div>
           )}
         </div>

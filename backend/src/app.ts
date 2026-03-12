@@ -1,12 +1,12 @@
 import express, { type Request, type Response } from 'express'
 import cors from 'cors'
 import 'dotenv/config'
+import { answerWithRAG, INDEX_NAME } from './rag-demo.ts'
 
-// Import your existing RAG functions (adapt paths)
-import { pinecone, INDEX_NAME } from './rag-demo.ts' 
-import { embedTexts } from './rag-demo.ts'           
-import { answerWithRAG } from './rag-demo.ts'       
+type ChatMessage = { role: 'user' | 'assistant'; content: string }
 
+// conversationId -> array of messages
+const conversations = new Map<string, ChatMessage[]>()
 
 const app = express()
 const PORT = process.env.PORT || 4000
@@ -19,7 +19,7 @@ app.use(express.urlencoded({ extended: true }))
 /**
  * Health check
  */
-app.get('/', (req: Response, res: Response) => {
+app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'RAG API is running', index: INDEX_NAME })
 })
 
@@ -28,9 +28,13 @@ app.get('/', (req: Response, res: Response) => {
  * POST /api/chat
  * Body: { "question": "How can I reset my password?" }
  */
+
 app.post('/api/chat', async (req: Request, res: Response) => {
   try {
-    const { question } = req.body
+    const { question, conversationId } = req.body as {
+      question?: string
+      conversationId?: string
+    }
 
     if (!question || typeof question !== 'string') {
       return res.status(400).json({
@@ -38,15 +42,26 @@ app.post('/api/chat', async (req: Request, res: Response) => {
       })
     }
 
-    console.log(`[API] Question received: "${question}"`)
+    const convoId = conversationId && typeof conversationId === 'string'
+      ? conversationId
+      : 'default' // or generate UUID per new chat
 
-    // Call your existing RAG function
-    const answer = await answerWithRAG(question)
+    const history = conversations.get(convoId) ?? []
 
-    // Return structured response
+    // Append user message to history
+    history.push({ role: 'user', content: question })
+
+    const { answer, sources } = await answerWithRAG(question, history)
+
+    // Append assistant answer
+    history.push({ role: 'assistant', content: answer })
+    conversations.set(convoId, history)
+
     res.json({
       answer,
       question,
+      sources,
+      conversationId: convoId,
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
@@ -57,6 +72,7 @@ app.post('/api/chat', async (req: Request, res: Response) => {
     })
   }
 })
+
 
 /**
  * Optional: Reindex endpoint (POST /api/reindex)
