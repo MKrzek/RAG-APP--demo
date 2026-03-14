@@ -1,0 +1,27 @@
+{
+  "name": "rag-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm start",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MKrzek/RAG-APP--demo.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/MKrzek/RAG-APP--demo/issues"
+  },
+  "homepage": "https://github.com/MKrzek/RAG-APP--demo#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
