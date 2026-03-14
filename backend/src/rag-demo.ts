@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import OpenAI from 'openai'
 import { Pinecone } from '@pinecone-database/pinecone'
-import { chunkTechnicalDoc } from './chunking/technical-doc-chunking.ts'
+import { chunkTechnicalDoc } from './rag/chunking/technical-doc-chunking.ts'
 import { retrieveRelevantChunks } from './retrieve-relevant-chunks.ts'
 import { embedTexts } from './embed-text.ts'
 
